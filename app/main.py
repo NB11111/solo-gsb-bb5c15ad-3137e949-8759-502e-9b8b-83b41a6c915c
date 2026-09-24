@@ -13,6 +13,7 @@ from . import schemas as s
 from . import consumptions as con
 from . import reservations as rsv
 from . import reversals as rev
+from . import reassignments as ra
 from . import service
 from . import stocktakes as st
 from . import transfers as tr
@@ -60,9 +61,14 @@ app = FastAPI(
         "- 位置交接整单冲正:按原交接单号、冲正号和操作人提交,读取原单全部明细,\n"
         "  单事务确认每个样品的最后一次位置交接仍是原单对应明细且当前位置等于原单目标位置,\n"
         "  任一不符逐项冲突、整单不改;通过后恢复全部样品到原单原位置(含未登记 null),\n"
-        "  另存不可变冲正审计并接入位置历史,保留原交接记录,按冲正号幂等重放与查询"
+        "  另存不可变冲正审计并接入位置历史,保留原交接记录,按冲正号幂等重放与查询\n"
+        "- 条码整批换绑:一个换绑批次号对多个样品给出预期旧条码与目标条码(null 均可),\n"
+        "  单事务核对样品存在、旧绑定与预期一致且目标条码未被批外样品占用,\n"
+        "  任一冲突整批不变并返回逐项原因;先统一解除本批旧绑定再写入新绑定,\n"
+        "  支持两样品互换与多样品循环;成功写不可变换绑审计,按批次号幂等重放,\n"
+        "  并提供按条码查询当前绑定样品的接口"
     ),
-    version="1.4.0",
+    version="1.5.0",
     lifespan=lifespan,
 )
 
@@ -147,6 +153,19 @@ async def consumption_error_handler(
         status_code=status_code,
         content={
             "error": code if status_code == 404 else "conflict",
+            "conflicts": [c.model_dump() for c in exc.conflicts],
+        },
+    )
+
+
+@app.exception_handler(ra.ReassignmentError)
+async def reassignment_error_handler(
+    _request, exc: ra.ReassignmentError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=409,
+        content={
+            "error": "conflict",
             "conflicts": [c.model_dump() for c in exc.conflicts],
         },
     )
@@ -631,3 +650,33 @@ def get_transfer_reversal(
     conn: sqlite3.Connection = Depends(get_conn),
 ) -> s.LocationTransferReversalResult:
     return rev.get_reversal(conn, reversal_no)
+
+
+# ---------------------------------------------------------------- 条码整批换绑
+
+@app.post(
+    "/api/v1/barcodes/reassignments",
+    response_model=s.BarcodeReassignmentResult,
+    tags=["条码换绑"],
+    summary="条码整批换绑:逐项给出预期旧条码与目标条码(null 表示未绑定/解绑),"
+            "单事务核对样品存在、旧绑定一致且目标条码未被批外占用,"
+            "任一冲突整批不变;先解除本批旧绑定再写新绑定,支持互换与循环",
+)
+def create_barcode_reassignment(
+    body: s.BarcodeReassignmentRequest,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> s.BarcodeReassignmentResult:
+    return ra.create_reassignment(conn, body)
+
+
+@app.get(
+    "/api/v1/barcodes/{barcode}",
+    response_model=s.BarcodeLookupResponse,
+    tags=["条码换绑"],
+    summary="按条码查询当前绑定样品(未绑定返回 bound=false)",
+)
+def lookup_barcode(
+    barcode: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> s.BarcodeLookupResponse:
+    return ra.lookup_barcode(conn, barcode)

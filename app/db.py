@@ -380,6 +380,70 @@ BEFORE DELETE ON location_transfer_reversal_items
 BEGIN
     SELECT RAISE(ABORT, 'location_transfer_reversal_items 不可变:禁止删除位置交接冲正明细');
 END;
+
+-- 条码整批换绑单:一个换绑批次号(reassignment_no,幂等键)对多个样品做条码
+-- 解绑/重绑;头表不可变(触发器禁止 UPDATE/DELETE),payload 保存规范化请求体
+CREATE TABLE IF NOT EXISTS barcode_reassignments (
+    reassignment_no TEXT PRIMARY KEY,
+    operator        TEXT,
+    payload         TEXT NOT NULL,
+    note            TEXT,
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+-- 换绑审计明细:逐项记录换绑前实际条码(old_barcode,含 null=未绑定)与
+-- 换绑后条码(new_barcode,含 null=解绑);触发器禁止 UPDATE/DELETE(不可变审计)
+CREATE TABLE IF NOT EXISTS barcode_reassignment_items (
+    item_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    reassignment_no  TEXT NOT NULL,
+    sample_id        TEXT NOT NULL,
+    seq_index        INTEGER NOT NULL,
+    old_barcode      TEXT,
+    new_barcode      TEXT,
+    operator         TEXT,
+    created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    FOREIGN KEY (reassignment_no) REFERENCES barcode_reassignments(reassignment_no),
+    FOREIGN KEY (sample_id)       REFERENCES samples(sample_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_breassign_no     ON barcode_reassignment_items(reassignment_no);
+CREATE INDEX IF NOT EXISTS idx_breassign_sample ON barcode_reassignment_items(sample_id);
+
+-- 样品条码当前绑定状态(每样品至多一条,每条码至多绑定一个样品):
+-- 有行=已绑定该行 barcode;无行=未绑定(解绑即删行)。换绑在单事务内
+-- 先整批删除本批样品旧行,再统一插入新行,故支持两样品互换与多样品循环
+CREATE TABLE IF NOT EXISTS sample_barcodes (
+    sample_id       TEXT PRIMARY KEY,
+    barcode         TEXT NOT NULL UNIQUE,
+    reassignment_no TEXT,
+    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    FOREIGN KEY (sample_id)       REFERENCES samples(sample_id),
+    FOREIGN KEY (reassignment_no) REFERENCES barcode_reassignments(reassignment_no)
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_breassign_hdr_no_update
+BEFORE UPDATE ON barcode_reassignments
+BEGIN
+    SELECT RAISE(ABORT, 'barcode_reassignments 不可变:禁止更新条码换绑单');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_breassign_hdr_no_delete
+BEFORE DELETE ON barcode_reassignments
+BEGIN
+    SELECT RAISE(ABORT, 'barcode_reassignments 不可变:禁止删除条码换绑单');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_breassign_no_update
+BEFORE UPDATE ON barcode_reassignment_items
+BEGIN
+    SELECT RAISE(ABORT, 'barcode_reassignment_items 不可变:禁止更新条码换绑明细');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_breassign_no_delete
+BEFORE DELETE ON barcode_reassignment_items
+BEGIN
+    SELECT RAISE(ABORT, 'barcode_reassignment_items 不可变:禁止删除条码换绑明细');
+END;
 """
 
 

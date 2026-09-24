@@ -126,6 +126,12 @@ class Conflict(BaseModel):
     available_location: Optional[str] = Field(
         default=None, description="位置交接冲突:样品当前实际位置"
     )
+    requested_barcode: Optional[str] = Field(
+        default=None, description="条码换绑冲突:请求声明的条码(预期旧条码/目标条码)"
+    )
+    available_barcode: Optional[str] = Field(
+        default=None, description="条码换绑冲突:样品当前实际绑定的条码(null=未绑定)"
+    )
 
 
 class EdgeOut(BaseModel):
@@ -601,4 +607,90 @@ class LocationTransferReversalResult(BaseModel):
     created_at: Optional[str] = None
     replayed: bool = Field(
         default=False, description="True 表示命中冲正号幂等,返回首次结果"
+    )
+
+
+# ---------------------------------------------------------------- 样品条码整批换绑
+
+Barcode = Annotated[str, Field(min_length=1, description="非空条码号")]
+
+
+class BarcodeReassignmentItemIn(BaseModel):
+    """换绑明细:样品 sample_id 预期当前绑定 expected_old_barcode,
+    换绑后绑定 target_barcode(null 表示解绑为未绑定)。"""
+
+    sample_id: str = Field(min_length=1)
+    expected_old_barcode: Optional[Barcode] = Field(
+        default=None, description="预期旧条码;null 表示该样品当前未绑定条码"
+    )
+    target_barcode: Optional[Barcode] = Field(
+        default=None, description="目标条码;null 表示解除绑定(解绑后该样品未绑定)"
+    )
+
+
+class BarcodeReassignmentRequest(BaseModel):
+    """样品条码整批换绑:一个换绑批次号对应多项样品的预期旧条码 -> 目标条码。
+
+    同批样品号不得重复;同批非空目标条码不得重复(允许多项解绑为 null)。
+    服务在单个 BEGIN IMMEDIATE 事务内逐项核对样品存在、旧绑定与预期一致,
+    且目标条码未被批外样品占用;全部通过后先解除本批旧绑定再写入新绑定,
+    因此支持两样品互换条码与多样品循环换绑。任一冲突整批不变。
+    """
+
+    reassignment_no: str = Field(
+        min_length=1, description="换绑批次号(幂等键),全局唯一"
+    )
+    items: list[BarcodeReassignmentItemIn] = Field(min_length=1)
+    operator: Optional[str] = Field(default=None, description="换绑操作人(审计展示)")
+    note: Optional[str] = Field(default=None, description="备注,仅用于审计展示")
+
+    @model_validator(mode="after")
+    def _check_items(self) -> "BarcodeReassignmentRequest":
+        ids = [i.sample_id for i in self.items]
+        if len(ids) != len(set(ids)):
+            raise ValueError("items 中存在重复 sample_id")
+        targets = [i.target_barcode for i in self.items if i.target_barcode is not None]
+        if len(targets) != len(set(targets)):
+            dup = sorted({t for t in targets if targets.count(t) > 1})
+            raise ValueError(
+                f"items 中存在重复的非空目标条码: {', '.join(dup)}"
+            )
+        return self
+
+
+class BarcodeReassignmentItemOut(BaseModel):
+    sample_id: str
+    expected_old_barcode: Optional[str] = Field(
+        description="请求声明的预期旧条码(null=预期未绑定)"
+    )
+    target_barcode: Optional[str] = Field(
+        description="换绑后绑定的条码(null=解绑为未绑定)"
+    )
+    from_barcode: Optional[str] = Field(
+        description="换绑前样品实际绑定的条码(校验通过时等于 expected_old_barcode)"
+    )
+
+
+class BarcodeReassignmentResult(BaseModel):
+    reassignment_no: str
+    operator: Optional[str] = None
+    note: Optional[str] = None
+    items: list[BarcodeReassignmentItemOut] = Field(
+        description="逐项换绑明细(预期旧条码 -> 目标条码)"
+    )
+    reassigned_at: str = Field(description="换绑落库时间(首次提交,UTC)")
+    created_at: Optional[str] = None
+    replayed: bool = Field(
+        default=False, description="True 表示命中批次号幂等,返回首次结果"
+    )
+
+
+class BarcodeLookupResponse(BaseModel):
+    barcode: str = Field(description="查询的条码号")
+    bound: bool = Field(description="该条码当前是否被样品绑定")
+    sample_id: Optional[str] = Field(
+        default=None, description="当前绑定该条码的样品号;未绑定为 null"
+    )
+    reassignment_no: Optional[str] = Field(
+        default=None, description="当前绑定由哪个换绑批次写入(审计溯源)"
     )

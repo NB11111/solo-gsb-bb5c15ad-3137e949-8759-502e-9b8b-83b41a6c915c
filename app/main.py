@@ -10,6 +10,7 @@ from fastapi import Depends, FastAPI, Query
 from fastapi.responses import JSONResponse
 
 from . import schemas as s
+from . import barcodes as bc
 from . import consumptions as con
 from . import reservations as rsv
 from . import reversals as rev
@@ -60,9 +61,13 @@ app = FastAPI(
         "- 位置交接整单冲正:按原交接单号、冲正号和操作人提交,读取原单全部明细,\n"
         "  单事务确认每个样品的最后一次位置交接仍是原单对应明细且当前位置等于原单目标位置,\n"
         "  任一不符逐项冲突、整单不改;通过后恢复全部样品到原单原位置(含未登记 null),\n"
-        "  另存不可变冲正审计并接入位置历史,保留原交接记录,按冲正号幂等重放与查询"
+        "  另存不可变冲正审计并接入位置历史,保留原交接记录,按冲正号幂等重放与查询\n"
+        "- 样品条码整批换绑:接收批次号与多项样品号/预期旧条码/目标条码(null=未绑定),\n"
+        "  单事务核对样品存在、旧绑定与预期一致且目标条码未被批外样品占用,\n"
+        "  先解除本批旧绑定再写入新绑定,支持两样品互换与多样品循环,\n"
+        "  任一冲突整批不变并返回逐项原因,按批次号幂等重放,写不可变换绑审计"
     ),
-    version="1.4.0",
+    version="1.5.0",
     lifespan=lifespan,
 )
 
@@ -143,6 +148,21 @@ async def consumption_error_handler(
     code = exc.conflicts[0].code if exc.conflicts else "consumption_error"
     not_found = {"reservation_not_found", "consumption_not_found"}
     status_code = 404 if code in not_found else 409
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "error": code if status_code == 404 else "conflict",
+            "conflicts": [c.model_dump() for c in exc.conflicts],
+        },
+    )
+
+
+@app.exception_handler(bc.BarcodeError)
+async def barcode_error_handler(
+    _request, exc: bc.BarcodeError
+) -> JSONResponse:
+    code = exc.conflicts[0].code if exc.conflicts else "barcode_error"
+    status_code = 404 if code in {"reassignment_not_found"} else 409
     return JSONResponse(
         status_code=status_code,
         content={
@@ -631,3 +651,45 @@ def get_transfer_reversal(
     conn: sqlite3.Connection = Depends(get_conn),
 ) -> s.LocationTransferReversalResult:
     return rev.get_reversal(conn, reversal_no)
+
+
+# ------------------------------------------------------------ 样品条码整批换绑
+
+@app.post(
+    "/api/v1/barcodes/reassignments",
+    response_model=s.BarcodeReassignmentResult,
+    tags=["条码换绑"],
+    summary="样品条码整批换绑:单事务核对样品存在/旧绑定一致/目标条码未被批外占用,"
+            "先解除本批旧绑定再写入新绑定,支持互换与循环,任一冲突整批不变",
+)
+def create_barcode_reassignment(
+    body: s.BarcodeReassignmentRequest,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> s.BarcodeReassignmentResult:
+    return bc.create_reassignment(conn, body)
+
+
+@app.get(
+    "/api/v1/barcodes/reassignments/{reassignment_no}",
+    response_model=s.BarcodeReassignmentResult,
+    tags=["条码换绑"],
+    summary="按换绑批次号查询首次换绑结果及逐项明细(幂等回放内容)",
+)
+def get_barcode_reassignment(
+    reassignment_no: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> s.BarcodeReassignmentResult:
+    return bc.get_reassignment(conn, reassignment_no)
+
+
+@app.get(
+    "/api/v1/barcodes/{barcode}",
+    response_model=s.BarcodeLookupResponse,
+    tags=["条码换绑"],
+    summary="按条码查询当前绑定的样品(未绑定时 bound=false)",
+)
+def lookup_barcode(
+    barcode: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> s.BarcodeLookupResponse:
+    return bc.lookup_barcode(conn, barcode)

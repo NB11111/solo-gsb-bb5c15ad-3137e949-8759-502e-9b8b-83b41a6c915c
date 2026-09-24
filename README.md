@@ -1,6 +1,6 @@
 # 科研样品分装追溯 API
 
-基于 **FastAPI + SQLite** 的科研样品谱系(lineage)追溯服务。支持样品的**取样、分装、合并、销毁/报废**四类操作,在数据库事务中完成余量(销毁按可用量)校验与环路检测,并通过唯一操作号实现**幂等提交**;可按任意样品回溯完整来源与去向,并对余量账本做一致性校验。销毁操作允许一次提交多个样品的销毁量与原因,服务在单事务内按当前可用量(余量减未释放预留)逐项校验,任一不足则整体回滚并返回逐项冲突,成功后写入不可变销毁审计记录与出库流水并递增样品版本,同时接入批量提交与 dry-run 预校验。此外提供四个扩展模块:**预留模块**——客户端可用一个预留号为多个样品分别锁定数量,服务在同一事务中校验各样品可用余量(当前余量减去未释放预留的未核销部分),全部足够才一次创建,支持按预留号幂等重放、整单释放与可用量查询;**核销领用模块**——对现有预留单分次领用,每次提交核销号、预留号与若干样品领用量,服务在同一事务中校验预留未释放、逐项未核销量与样品余量,任一失败整单不变,成功后扣减样品余量、递增版本并写入不可变核销明细,同一核销号同内容幂等重放;核销后只将未核销部分继续计入锁定量,释放预留时仅解除剩余锁定,核销量纳入余量账本校验;**盘点模块**——按样品编号集合建批保存余量/版本快照,提交实盘结果时逐项乐观锁校验数据库余量未被其他操作改变并计算系统量与实盘量差异,确认时在单事务内再次校验版本、写入盘点调整流水并更新样品余量(任一项冲突则整批不改库存),按盘点批次号支持同请求幂等重放与不同内容冲突;**位置交接模块**——一次提交多个样品的原位置与目标位置,服务在单个 `BEGIN IMMEDIATE` 事务内逐项校验样品仍处于请求所述原位置,任一不符(样品不存在或已被移动)则整批不变,全部通过后统一更新各样品位置并逐项记录交接人、交接时间与变更前后位置(审计表不可变),同时提供按样品查询交接历史的接口,交接按交接单号幂等重放;**位置交接整单冲正**——按原交接单号、冲正号和操作人提交(原单明细由服务端读取),在单个事务内确认每个样品的最后一次位置交接仍是原单对应明细且当前位置等于原单目标位置,任一不符返回逐项冲突且整单不改,全部通过后把全部样品恢复到原单原位置(含未登记的 null),另存不可变冲正审计并接入位置历史,原交接记录原样保留,同冲正号同内容重放不重复回退,并提供按冲正号查询接口。
+基于 **FastAPI + SQLite** 的科研样品谱系(lineage)追溯服务。支持样品的**取样、分装、合并、销毁/报废**四类操作,在数据库事务中完成余量(销毁按可用量)校验与环路检测,并通过唯一操作号实现**幂等提交**;可按任意样品回溯完整来源与去向,并对余量账本做一致性校验。销毁操作允许一次提交多个样品的销毁量与原因,服务在单事务内按当前可用量(余量减未释放预留)逐项校验,任一不足则整体回滚并返回逐项冲突,成功后写入不可变销毁审计记录与出库流水并递增样品版本,同时接入批量提交与 dry-run 预校验。此外提供四个扩展模块:**预留模块**——客户端可用一个预留号为多个样品分别锁定数量,服务在同一事务中校验各样品可用余量(当前余量减去未释放预留的未核销部分),全部足够才一次创建,支持按预留号幂等重放、整单释放与可用量查询;**核销领用模块**——对现有预留单分次领用,每次提交核销号、预留号与若干样品领用量,服务在同一事务中校验预留未释放、逐项未核销量与样品余量,任一失败整单不变,成功后扣减样品余量、递增版本并写入不可变核销明细,同一核销号同内容幂等重放;核销后只将未核销部分继续计入锁定量,释放预留时仅解除剩余锁定,核销量纳入余量账本校验;**盘点模块**——按样品编号集合建批保存余量/版本快照,提交实盘结果时逐项乐观锁校验数据库余量未被其他操作改变并计算系统量与实盘量差异,确认时在单事务内再次校验版本、写入盘点调整流水并更新样品余量(任一项冲突则整批不改库存),按盘点批次号支持同请求幂等重放与不同内容冲突;**位置交接模块**——一次提交多个样品的原位置与目标位置,服务在单个 `BEGIN IMMEDIATE` 事务内逐项校验样品仍处于请求所述原位置,任一不符(样品不存在或已被移动)则整批不变,全部通过后统一更新各样品位置并逐项记录交接人、交接时间与变更前后位置(审计表不可变),同时提供按样品查询交接历史的接口,交接按交接单号幂等重放;**位置交接整单冲正**——按原交接单号、冲正号和操作人提交(原单明细由服务端读取),在单个事务内确认每个样品的最后一次位置交接仍是原单对应明细且当前位置等于原单目标位置,任一不符返回逐项冲突且整单不改,全部通过后把全部样品恢复到原单原位置(含未登记的 null),另存不可变冲正审计并接入位置历史,原交接记录原样保留,同冲正号同内容重放不重复回退,并提供按冲正号查询接口。**样品条码整批换绑模块**——`POST /api/v1/barcodes/reassignments` 接收换绑批次号与多项样品号、预期旧条码、目标条码(`null` 表示未绑定);同批样品号与非空目标条码不得重复。服务在单个 `BEGIN IMMEDIATE` 事务内核对样品存在、旧绑定与预期一致、且目标条码未被批外样品占用,全部通过后先解除本批旧绑定再写入新绑定(因此支持两样品互换与多样品循环),任一冲突整批不变并返回逐项原因;同批次号同内容重放首次结果且不重复审计,异内容返回冲突,成功写入不可变换绑审计,并提供按条码查询当前样品的接口。
 
 ## 一键启动
 
@@ -55,6 +55,9 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 | 位置交接审计 | 交接成功后逐项写入不可变表 `location_transfer_items`(样品、变更前/后位置、交接人、交接时间),头表与明细表触发器均禁止 UPDATE/DELETE |
 | 位置交接整单冲正 | 按原交接单号(`transfer_no`)、冲正号(`reversal_no`,幂等键)与操作人提交,原单明细由服务端读取;冲正把样品恢复到原单**原位置**(from_location,含未登记 null),原交接记录保留 |
 | 冲正审计 | 冲正成功即写不可变表 `location_transfer_reversals` / `location_transfer_reversal_items`(冲正前位置=原单目标、冲正后位置=原单原位置、冲正人、冲正时间),触发器禁止 UPDATE/DELETE,并作为 `kind=reversal` 事件接入样品位置历史 |
+| 样品条码绑定 | 当前绑定存于 `sample_barcodes`(每样品至多一条、每条码至多绑定一个样品,双唯一约束);换绑先整批删除本批旧绑定再写新绑定,故支持互换与循环,`reassignment_no` 溯源写入批次 |
+| 条码换绑批次 | 一个换绑批次号(`reassignment_no`,幂等键)对应一次整批换绑;逐项给出样品号、**预期旧条码**与**目标条码**(null 分别表示预期未绑定/解绑),同批样品号与非空目标条码不得重复 |
+| 换绑审计 | 换绑成功即写不可变表 `barcode_reassignments` / `barcode_reassignment_items`(预期旧条码、实际旧绑定、目标条码、操作人、换绑时间),触发器禁止 UPDATE/DELETE |
 
 **事务保证**
 
@@ -112,6 +115,15 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 - **幂等**:同一冲正号 + 同一请求体重放返回首次结果(`replayed: true`,返回首次冲正时间),**不重复回退、不重复写审计**——即使重放时样品已被再次移动,也只回放原结果;同号不同内容返回 `409 reversal_no_conflict`。
 - **按冲正号查询**:`GET /api/v1/transfers/reversals/{reversal_no}` 返回冲正单及逐项回退明细;冲正号不存在返回 HTTP `404 reversal_not_found`。新表随容器启动时的数据库初始化自动创建(旧版本数据库无需手工迁移)。
 
+**样品条码整批换绑事务保证**
+
+- 换绑请求一次给出**换绑批次号 `reassignment_no`** 与若干明细,每项包含样品号 `sample_id`、**预期旧条码 `expected_old_barcode`** 与**目标条码 `target_barcode`**;两者为 `null` 分别表示「预期样品当前未绑定条码」与「解绑为未绑定」。请求体内同批样品号不得重复、非空目标条码不得重复(允许多项解绑为 null),违反返回 `422`。
+- 服务在单个 `BEGIN IMMEDIATE` 事务内逐项核对三件事:① 样品存在(否则 `sample_not_found`);② 样品当前绑定与预期旧条码完全一致,含 null=未绑定(否则 `barcode_mismatch`,冲突体带 `requested_barcode` 预期旧条码与 `available_barcode` 当前实际条码);③ 非空目标条码未被**本批之外**的样品占用(否则 `barcode_already_bound`,消息注明占用样品号)。**任一项不符即整批回滚**,响应 `conflicts[]` 一次返回全部不符明细(带批内下标 `batch_index`),不改动任何绑定、不写任何审计。
+- 全部通过后在同一事务内**先删除本批样品的全部旧绑定,再统一写入新绑定**(解绑项不产生绑定行),因此两样品互换条码、三样品循环换绑、以及「本批内解绑后由另一项同批占用」都能一次完成;数据库双唯一约束(`sample_id UNIQUE`、`barcode PRIMARY KEY`)兜底。成功后逐项写不可变审计 `barcode_reassignments`(头表,保存规范化请求体)与 `barcode_reassignment_items`(预期旧条码、实际旧绑定、目标条码、操作人、时间),两张表均由触发器禁止 UPDATE/DELETE。
+- 换绑只改条码绑定,**不改动余量与版本、不产生谱系边与出入库流水**,换绑后 `/api/v1/checks/balances` 仍保持一致。
+- **幂等**:同一换绑批次号 + 同一请求体重放返回首次结果(`replayed: true`,返回首次换绑时间),**不重复换绑、不重复写审计**——即使重放时样品绑定已变化,也只回放原结果;同号不同内容返回 `409 reassignment_no_conflict`。
+- **按条码查询**:`GET /api/v1/barcodes/{barcode}` 返回条码当前是否被绑定、绑定的样品号与写入该绑定的换绑批次号;条码未绑定时 `bound: false`、`sample_id: null`。`GET /api/v1/barcodes/reassignments/{reassignment_no}` 可取回首次换绑凭证,批次号不存在返回 HTTP `404 reassignment_not_found`。新表随容器启动时的数据库初始化自动创建(旧版本数据库无需手工迁移)。
+
 ## API 一览
 
 | 方法 | 路径 | 说明 |
@@ -142,6 +154,9 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 | POST | `/api/v1/transfers/reversals` | 位置交接整单冲正:按原交接单号/冲正号/操作人提交,逐项确认最后交接仍是原单且位置未变,通过后恢复原位置并写不可变冲正审计 |
 | GET  | `/api/v1/transfers/reversals/{reversal_no}` | 按冲正号查询冲正单及逐项回退明细(幂等凭证,不存在返回 404) |
 | GET  | `/api/v1/samples/{id}/transfers` | 按样品查询位置交接历史(含冲正回退事件,交接人、时间、变更前后位置,最新在前) |
+| POST | `/api/v1/barcodes/reassignments` | 样品条码整批换绑:单事务核对样品存在/旧绑定一致/目标条码未被批外占用,先解绑再写入,支持互换与循环,任一冲突整批不变 |
+| GET  | `/api/v1/barcodes/reassignments/{reassignment_no}` | 按换绑批次号查询首次换绑结果及逐项明细(幂等凭证,不存在返回 404) |
+| GET  | `/api/v1/barcodes/{barcode}` | 按条码查询当前绑定的样品(未绑定时 `bound=false`) |
 | GET  | `/api/v1/operations/{op_no}` | 按操作号取首次提交的原始结果(幂等凭证) |
 | GET  | `/health` | 健康检查 |
 
@@ -629,6 +644,90 @@ curl http://localhost:8000/api/v1/transfers/reversals/RVS-20260924-001
 # 冲正号不存在返回 HTTP 404 reversal_not_found
 ```
 
+### 16. 样品条码整批换绑:互换/循环/解绑、整批原子提交
+
+每个样品至多绑定一个条码、每个条码至多绑定一个样品。一次提交**换绑批次号**与多项「样品号 / 预期旧条码 / 目标条码」(`null` 表示未绑定)。服务在**单个 `BEGIN IMMEDIATE` 事务**内先核对全部样品存在、旧绑定与预期一致、且目标条码未被批外样品占用:
+
+```bash
+# 首绑:S1、S2 原本均未绑定
+curl -X POST http://localhost:8000/api/v1/barcodes/reassignments \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "reassignment_no": "BR-20260924-001",
+    "operator": "陈扫码",
+    "note": "首批贴码",
+    "items": [
+      {"sample_id": "S1", "expected_old_barcode": null, "target_barcode": "BC-001"},
+      {"sample_id": "S2", "expected_old_barcode": null, "target_barcode": "BC-002"}
+    ]
+  }'
+
+# 两样品互换条码(先整批解绑再写入,单事务完成)
+curl -X POST http://localhost:8000/api/v1/barcodes/reassignments \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "reassignment_no": "BR-20260924-002",
+    "operator": "陈扫码",
+    "items": [
+      {"sample_id": "S1", "expected_old_barcode": "BC-001", "target_barcode": "BC-002"},
+      {"sample_id": "S2", "expected_old_barcode": "BC-002", "target_barcode": "BC-001"}
+    ]
+  }'
+```
+
+三样品循环(`S1→BC-002、S2→BC-003、S3→BC-001`)、以及「一项解绑、另一项同批占用刚释放的条码」也都按同一规则一次提交成功。解绑把 `target_barcode` 置为 `null` 即可:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/barcodes/reassignments \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "reassignment_no": "BR-20260924-003",
+    "items": [
+      {"sample_id": "S1", "expected_old_barcode": "BC-002", "target_barcode": null}
+    ]
+  }'
+```
+
+任一项核对不过(样品不存在、旧绑定与预期不符、目标条码被**批外**样品占用)时返回 `409`,`conflicts[]` **一次列出全部不符明细**(带批内下标 `batch_index`、`requested_barcode`/`available_barcode`),**整批回滚,任何样品的绑定都不变,且失败批次不留审计**:
+
+```json
+{
+  "error": "conflict",
+  "conflicts": [{
+    "code": "barcode_mismatch",
+    "message": "样品 S1 当前绑定条码 「BC-009」 与预期旧条码 「BC-001」 不符,整批拒绝换绑",
+    "op_no": "BR-20260924-009",
+    "batch_index": 0,
+    "sample_id": "S1",
+    "requested_barcode": "BC-001",
+    "available_barcode": "BC-009"
+  }, {
+    "code": "barcode_already_bound",
+    "message": "目标条码 BC-007 已被本批之外的样品 S8 占用,整批拒绝换绑",
+    "op_no": "BR-20260924-009",
+    "batch_index": 1,
+    "sample_id": "S2",
+    "requested_barcode": "BC-007",
+    "available_barcode": null
+  }]
+}
+```
+
+请求体内同批样品号重复、或非空目标条码重复时直接 `422`(允许多项解绑为 null)。同一换绑批次号用**完全相同**的请求体重放返回首次结果且 `replayed: true`,**不重复换绑、不重复写审计**(即使期间绑定已变化也只回放原结果);同号不同内容返回 `409 reassignment_no_conflict`。
+
+按条码查询当前样品、按批次号取回换绑凭证:
+
+```bash
+curl http://localhost:8000/api/v1/barcodes/BC-001
+# {"barcode":"BC-001","bound":true,"sample_id":"S2","reassignment_no":"BR-20260924-002"}
+# 未绑定的条码:{"barcode":"BC-999","bound":false,"sample_id":null,"reassignment_no":null}
+
+curl http://localhost:8000/api/v1/barcodes/reassignments/BR-20260924-002
+# 批次号不存在返回 HTTP 404 reassignment_not_found
+```
+
+换绑只改条码绑定、不动余量与版本,换绑后 `/api/v1/checks/balances` 仍一致;审计写入不可变表 `barcode_reassignments` / `barcode_reassignment_items`,新表随容器启动自动创建,数据保存在 Docker 卷 `sample-data` 中。
+
 ## 冲突码
 
 | code | 含义 |
@@ -667,6 +766,10 @@ curl http://localhost:8000/api/v1/transfers/reversals/RVS-20260924-001
 | `transfer_not_found` | 冲正时引用的原交接单号不存在(HTTP 404) |
 | `reversal_no_conflict` | 冲正号已存在但请求内容不同(幂等键冲突) |
 | `reversal_not_found` | 冲正号不存在(按冲正号查询时返回 HTTP 404) |
+| `barcode_mismatch` | 样品当前绑定条码与预期旧条码不一致(含 null=未绑定),附 `requested_barcode`/`available_barcode` 与批内下标 |
+| `barcode_already_bound` | 目标条码已被本批之外的样品占用(批内互换/循环允许),附占用样品号与批内下标 |
+| `reassignment_no_conflict` | 换绑批次号已存在但请求内容不同(幂等键冲突) |
+| `reassignment_not_found` | 换绑批次号不存在(按批次号查询时返回 HTTP 404) |
 
 ## 运行测试
 
@@ -680,14 +783,15 @@ python -m pytest -q
 ```
 app/
   config.py        # 数据库路径、容差等配置
-  db.py            # SQLite 连接 / 建表 / 增量迁移(WAL、外键、CHECK 约束、预留/核销/盘点/销毁/位置交接/冲正表)
-  schemas.py       # Pydantic 请求与响应模型(含冲突结构、预留、核销领用、盘点、销毁、位置交接与整单冲正模型)
+  db.py            # SQLite 连接 / 建表 / 增量迁移(WAL、外键、CHECK 约束、预留/核销/盘点/销毁/位置交接/冲正/条码换绑表)
+  schemas.py       # Pydantic 请求与响应模型(含冲突结构、预留、核销领用、盘点、销毁、位置交接与整单冲正、条码换绑模型)
   service.py       # 核心:事务提交、余量/可用量/环路校验、销毁审计、幂等回放、dry-run、递归回溯、账本审计
   reservations.py  # 预留:单事务多样品锁定、幂等重放、整单释放、可用量查询、事件审计(锁定量只计未核销部分)
   consumptions.py  # 核销领用:单事务校验预留未释放/逐项未核销量/样品余量,扣减余量、递增版本、不可变明细,幂等重放
   stocktakes.py    # 盘点:快照建批、提交版本校验与差异、确认二次校验后整批原子调账
   transfers.py     # 位置交接:单事务多样品原位置校验、整批原子移动、不可变审计、幂等重放、按样品查历史(含冲正事件)
   reversals.py     # 位置交接整单冲正:单事务逐项确认最后交接仍是原单且位置未变,恢复原位置(含 null)、不可变审计、幂等重放、按冲正号查询
+  barcodes.py      # 样品条码整批换绑:单事务核对存在/旧绑定/批外占用,先整批解绑再写入(互换与循环)、不可变审计、幂等重放、按条码查当前样品
   main.py          # FastAPI 路由
 tests/
   test_api.py          # 操作链路端到端测试(TestClient)
@@ -697,6 +801,7 @@ tests/
   test_stocktakes.py   # 盘点工作流端到端/并发确认/旧库迁移测试
   test_transfers.py    # 位置交接:原位置校验整批回滚、幂等、历史查询、并发串行化、不可变审计、旧库建表
   test_reversals.py    # 位置交接整单冲正:逐项最后交接/位置校验整单不改、恢复 null、不可变审计、幂等/重复冲正冲突、查询、旧库建表
+  test_barcodes.py     # 样品条码换绑:互换/循环/解绑、逐项核对整批回滚、重复请求 422、幂等不重复审计、按条码查询、并发与旧库建表
 Dockerfile
 docker-compose.yml
 ```
